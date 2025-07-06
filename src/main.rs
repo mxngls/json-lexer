@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::io::{BufReader, Read};
+use std::iter::Peekable;
 
 pub struct JsonLexer<R: Read> {
     reader: R,
@@ -9,6 +10,7 @@ pub struct JsonLexer<R: Read> {
 pub enum JsonError {
     InvalidCharacter(char),
     InvalidEscapeSequence(char),
+    InvalidNumber(i64),
 
     IoError(std::io::Error),
 
@@ -32,6 +34,10 @@ impl From<JsonError> for std::io::Error {
                 std::io::ErrorKind::InvalidData,
                 format!("Invalid escape sequence: \\{}", c),
             ),
+            JsonError::InvalidNumber(n) => std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Invalid number: {}", n),
+            ),
             JsonError::IoError(io_err) => io_err,
             JsonError::UnexpectedEndOfInput => std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -50,7 +56,7 @@ enum JsonToken {
     ObjectStart,
     String(String),
     Boolean(bool),
-    Number(u64),
+    Number(i64),
 }
 
 impl<R: Read> JsonLexer<R> {
@@ -74,36 +80,34 @@ impl<R: Read> JsonLexer<R> {
                 b',' => tokens.push(JsonToken::Comma),
 
                 // booleans
-                b't' => {
-                    tokens.push(JsonToken::Boolean(Self::consume_literal(
-                        &mut byte_iter,
-                        b"true",
-                    )?));
+                b'f' | b't' => {
+                    tokens.push(Self::consume_literal(&mut byte_iter, &byte)?);
                 }
-                b'f' => {
-                    tokens.push(JsonToken::Boolean(Self::consume_literal(
-                        &mut byte_iter,
-                        b"false",
-                    )?));
+
+                // numbers
+                b'0'..=b'9' | b'+' | b'-' => {
+                    tokens.push(Self::consume_number(&mut byte_iter, &byte)?);
                 }
 
                 // strings
-                b'"' => tokens.push(JsonToken::String(Self::consume_string(&mut byte_iter)?)),
+                b'"' => tokens.push(Self::consume_string(&mut byte_iter)?),
+
+                // invalid or not yet implemented
                 _ => tokens.push(JsonToken::Invalid),
             }
         }
 
         tokens.iter().for_each(|t| match t {
-            JsonToken::String(_) => {
-                println!("{:?}", t);
-            }
+            JsonToken::String(s) => println!("String: \"{}\"", s),
+            JsonToken::Number(n) => println!("Number: {}", n),
+            JsonToken::Boolean(b) => println!("Boolean: {}", b),
             _ => println!("{:?}", t),
         });
 
         Ok(())
     }
 
-    fn consume_string<I>(byte_iter: &mut I) -> Result<String, JsonError>
+    fn consume_string<I>(byte_iter: &mut I) -> Result<JsonToken, JsonError>
     where
         I: Iterator<Item = Result<u8, std::io::Error>>,
     {
@@ -111,7 +115,7 @@ impl<R: Read> JsonLexer<R> {
 
         while let Some(byte) = byte_iter.next().transpose()? {
             match byte {
-                b'"' => return Ok(str),
+                b'"' => return Ok(JsonToken::String(str)),
                 b'\\' => {
                     if let Some(escaped) = byte_iter.next().transpose()? {
                         match escaped {
@@ -134,13 +138,14 @@ impl<R: Read> JsonLexer<R> {
             str.push(byte as char);
         }
 
-        return Ok(str);
+        return Ok(JsonToken::String(str));
     }
 
-    fn consume_literal<I>(byte_iter: &mut I, expected: &[u8]) -> Result<bool, JsonError>
+    fn consume_literal<I>(byte_iter: &mut I, byte: &u8) -> Result<JsonToken, JsonError>
     where
         I: Iterator<Item = Result<u8, std::io::Error>>,
     {
+        let expected: &[u8] = if *byte == b'f' { b"false" } else { b"true" };
         let len = expected.len();
         for &expected_byte in &expected[1..len] {
             match byte_iter.next() {
@@ -151,16 +156,55 @@ impl<R: Read> JsonLexer<R> {
             }
         }
 
-        println!("expected: {:?}", String::from_utf8(Vec::from(expected)));
-
         if expected[0] == b't' {
-            Ok(true)
+            Ok(JsonToken::Boolean(true))
         } else {
-            Ok(false)
+            Ok(JsonToken::Boolean(false))
         }
     }
 
-    // fn consume_number<I>(byte_iter: &mut I) -> Res {}
+    fn consume_number<I>(byte_iter: &mut Peekable<I>, byte: &u8) -> Result<JsonToken, JsonError>
+    where
+        I: Iterator<Item = Result<u8, std::io::Error>>,
+    {
+        let mut is_negative = false;
+        let mut n: i64 = 0;
+
+        match byte {
+            b'+' => (),
+            b'-' => is_negative = true,
+            b'0'..=b'9' => {
+                n = (*byte - b'0') as i64;
+            }
+            _ => return Err(JsonError::InvalidNumber(0)),
+        };
+
+        while let Some(Ok(peeked)) = byte_iter.peek() {
+            match peeked {
+                b'0'..=b'9' => {
+                    let Some(byte) = byte_iter.next().transpose()? else {
+                        return Err(JsonError::UnexpectedEndOfInput);
+                    };
+
+                    let digit = (byte - b'0') as i64;
+                    n = n * 10 + digit;
+
+                    if n > i64::MAX / 10 {
+                        return Err(JsonError::InvalidNumber(n));
+                    }
+                }
+                _ => {
+                    break;
+                }
+            }
+        }
+
+        if is_negative {
+            n = -n;
+        }
+
+        return Ok(JsonToken::Number(n));
+    }
 }
 
 fn main() -> std::io::Result<()> {
