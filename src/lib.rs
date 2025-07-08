@@ -56,6 +56,7 @@ enum JsonToken {
     String(String),
     Boolean(bool),
     Number(f64),
+    Null,
 }
 
 impl<R: Read> JsonLexer<R> {
@@ -79,8 +80,16 @@ impl<R: Read> JsonLexer<R> {
                 b',' => tokens.push(JsonToken::Comma),
 
                 // booleans
-                b'f' | b't' => {
-                    tokens.push(Self::consume_literal(&mut byte_iter, &byte)?);
+                b'f' => {
+                    tokens.push(Self::consume_literal(&mut byte_iter, b"false")?);
+                }
+                b't' => {
+                    tokens.push(Self::consume_literal(&mut byte_iter, b"true")?);
+                }
+
+                // null
+                b'n' => {
+                    tokens.push(Self::consume_literal(&mut byte_iter, b"null")?);
                 }
 
                 // numbers
@@ -146,11 +155,10 @@ impl<R: Read> JsonLexer<R> {
         return Ok(JsonToken::String(str));
     }
 
-    fn consume_literal<I>(byte_iter: &mut I, byte: &u8) -> Result<JsonToken, JsonError>
+    fn consume_literal<I>(byte_iter: &mut I, expected: &[u8]) -> Result<JsonToken, JsonError>
     where
         I: Iterator<Item = Result<u8, std::io::Error>>,
     {
-        let expected: &[u8] = if *byte == b'f' { b"false" } else { b"true" };
         let len = expected.len();
         for &expected_byte in &expected[1..len] {
             match byte_iter.next() {
@@ -163,8 +171,10 @@ impl<R: Read> JsonLexer<R> {
 
         if expected[0] == b't' {
             Ok(JsonToken::Boolean(true))
-        } else {
+        } else if expected[0] == b'f' {
             Ok(JsonToken::Boolean(false))
+        } else {
+            Ok(JsonToken::Null)
         }
     }
 
