@@ -177,6 +177,7 @@ impl<R: Read> JsonLexer<R> {
         let mut n: f64 = 0.0;
         let mut nfraction = 1;
 
+        // possible signs
         match byte {
             b'+' => (),
             b'-' => is_negative = true,
@@ -188,6 +189,7 @@ impl<R: Read> JsonLexer<R> {
 
         while let Some(Ok(peeked)) = byte_iter.peek() {
             match peeked {
+                // integer part
                 b'0'..=b'9' if !is_fraction => {
                     let Some(byte) = byte_iter.next().transpose()? else {
                         return Err(JsonError::UnexpectedEndOfInput);
@@ -199,6 +201,7 @@ impl<R: Read> JsonLexer<R> {
                         return Err(JsonError::InvalidNumber(n));
                     }
                 }
+                // decimal part
                 b'0'..=b'9' => {
                     let Some(byte) = byte_iter.next().transpose()? else {
                         return Err(JsonError::UnexpectedEndOfInput);
@@ -207,6 +210,7 @@ impl<R: Read> JsonLexer<R> {
                     n = n + (digit / 10_f64.powi(nfraction));
                     nfraction += 1;
                 }
+                // decimal point
                 b'.' => {
                     if is_fraction {
                         return Err(JsonError::InvalidNumber(n));
