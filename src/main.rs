@@ -10,7 +10,7 @@ pub struct JsonLexer<R: Read> {
 pub enum JsonError {
     InvalidCharacter(char),
     InvalidEscapeSequence(char),
-    InvalidNumber(i64),
+    InvalidNumber(f64),
 
     IoError(std::io::Error),
 
@@ -56,7 +56,7 @@ enum JsonToken {
     ObjectStart,
     String(String),
     Boolean(bool),
-    Number(i64),
+    Number(f64),
 }
 
 impl<R: Read> JsonLexer<R> {
@@ -97,12 +97,18 @@ impl<R: Read> JsonLexer<R> {
             }
         }
 
-        tokens.iter().for_each(|t| match t {
-            JsonToken::String(s) => println!("String: \"{}\"", s),
-            JsonToken::Number(n) => println!("Number: {}", n),
-            JsonToken::Boolean(b) => println!("Boolean: {}", b),
-            _ => println!("{:?}", t),
+        tokens.iter().for_each(|t| {
+            print!("[");
+            match t {
+                JsonToken::String(s) => print!("String: \"{}\"", s),
+                JsonToken::Number(n) => print!("Number: {}", n),
+                JsonToken::Boolean(b) => print!("Boolean: {}", b),
+                _ => print!("{:?}", t),
+            };
+            print!("], ");
         });
+
+        println!();
 
         Ok(())
     }
@@ -168,30 +174,46 @@ impl<R: Read> JsonLexer<R> {
         I: Iterator<Item = Result<u8, std::io::Error>>,
     {
         let mut is_negative = false;
-        let mut n: i64 = 0;
+        let mut is_fraction = false;
+        let mut n: f64 = 0.0;
+        let mut nfraction = 1;
 
         match byte {
             b'+' => (),
             b'-' => is_negative = true,
             b'0'..=b'9' => {
-                n = (*byte - b'0') as i64;
+                n = (*byte - b'0') as f64;
             }
-            _ => return Err(JsonError::InvalidNumber(0)),
+            _ => return Err(JsonError::InvalidNumber(0.0)),
         };
 
         while let Some(Ok(peeked)) = byte_iter.peek() {
             match peeked {
+                b'0'..=b'9' if !is_fraction => {
+                    let Some(byte) = byte_iter.next().transpose()? else {
+                        return Err(JsonError::UnexpectedEndOfInput);
+                    };
+                    let digit = (byte - b'0') as f64;
+                    n = n * 10.0 + digit;
+
+                    if n > f64::MAX / 10.0 {
+                        return Err(JsonError::InvalidNumber(n));
+                    }
+                }
                 b'0'..=b'9' => {
                     let Some(byte) = byte_iter.next().transpose()? else {
                         return Err(JsonError::UnexpectedEndOfInput);
                     };
-
-                    let digit = (byte - b'0') as i64;
-                    n = n * 10 + digit;
-
-                    if n > i64::MAX / 10 {
+                    let digit = (byte - b'0') as f64;
+                    n = n + (digit / 10_f64.powi(nfraction));
+                    nfraction += 1;
+                }
+                b'.' => {
+                    if is_fraction {
                         return Err(JsonError::InvalidNumber(n));
                     }
+                    is_fraction = true;
+                    byte_iter.next().transpose()?;
                 }
                 _ => {
                     break;
